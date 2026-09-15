@@ -10,6 +10,8 @@
   
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
   <style>
@@ -36,8 +38,8 @@
         </div>
         <div>
           <h1 class="font-extrabold text-lg tracking-tight text-slate-900">Stef Fintech</h1>
-          <p class="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Sistema Local Optimizado
+          <p id="conn-status" class="text-xs font-semibold text-amber-500 flex items-center gap-1">
+            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> Conectando a Firebase...
           </p>
         </div>
       </div>
@@ -60,6 +62,18 @@
       </div>
     </div>
   </header>
+
+  <!-- BANNER DE ERROR DE CONEXIÓN (oculto por defecto) -->
+  <div id="conn-error-banner" class="hidden bg-rose-50 border-b border-rose-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
+      <p class="text-sm font-bold text-rose-700 flex items-center gap-2">
+        ⚠️ <span id="conn-error-text">No se pudo conectar a Firebase.</span>
+      </p>
+      <button onclick="location.reload()" class="px-3 py-1.5 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 transition">
+        Reintentar
+      </button>
+    </div>
+  </div>
 
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
 
@@ -219,12 +233,106 @@
       history: []
     };
 
-    let state = JSON.parse(localStorage.getItem('stef_fintech_db')) || DEFAULT_DATA;
+    // ===== CONFIGURACIÓN DE FIREBASE =====
+    const firebaseConfig = {
+      apiKey: "AIzaSyDpHYNnuLQjZlWxfNYFRJdmhHDlK5-geTs",
+      authDomain: "stef-fintech.firebaseapp.com",
+      databaseURL: "https://stef-fintech-default-rtdb.firebaseio.com",
+      projectId: "stef-fintech",
+      storageBucket: "stef-fintech.firebasestorage.app",
+      messagingSenderId: "786412491071",
+      appId: "1:786412491071:web:f45819ad7209651b86bfa6"
+    };
+
+    const DB_PATH = 'stef_fintech_data';
+
+    let state = DEFAULT_DATA;
     let chartInstance = null;
+    let dbRef = null;
+    let firebaseReady = false;
+    let saveTimeout = null;
+
+    function setConnStatus(mode, message) {
+      const el = document.getElementById('conn-status');
+      const banner = document.getElementById('conn-error-banner');
+      const bannerText = document.getElementById('conn-error-text');
+      if (mode === 'connecting') {
+        el.className = 'text-xs font-semibold text-amber-500 flex items-center gap-1';
+        el.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> Conectando a Firebase...';
+        banner.classList.add('hidden');
+      } else if (mode === 'connected') {
+        el.className = 'text-xs font-semibold text-emerald-600 flex items-center gap-1';
+        el.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Conectado a Firebase';
+        banner.classList.add('hidden');
+      } else if (mode === 'error') {
+        el.className = 'text-xs font-semibold text-rose-600 flex items-center gap-1';
+        el.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-500"></span> Sin conexión';
+        bannerText.innerText = message || 'No se pudo conectar a Firebase. Revisa tu internet o las reglas de la base de datos.';
+        banner.classList.remove('hidden');
+      }
+    }
+
+    function initFirebase() {
+      try {
+        const app = firebase.initializeApp(firebaseConfig);
+        const db = firebase.database(app);
+        dbRef = db.ref(DB_PATH);
+
+        // Si en 8 segundos no ha llegado ni un primer dato ni un error, avisamos
+        // en vez de dejar la app pegada en "Conectando..." para siempre.
+        const timeoutId = setTimeout(() => {
+          if (!firebaseReady) {
+            setConnStatus('error', 'Firebase está tardando demasiado en responder. Revisa tu conexión a internet o las reglas de la base de datos.');
+            renderApp(); // renderiza con datos por defecto mientras tanto, para que la UI no se quede en blanco
+          }
+        }, 8000);
+
+        dbRef.on('value', (snapshot) => {
+          clearTimeout(timeoutId);
+          firebaseReady = true;
+          const data = snapshot.val();
+          if (data) {
+            // Normaliza por si faltan llaves para no romper el render
+            state = {
+              cards: data.cards || DEFAULT_DATA.cards,
+              domiciled: data.domiciled || DEFAULT_DATA.domiciled,
+              loans: data.loans || [],
+              history: data.history || []
+            };
+          } else {
+            // No hay datos todavía en Firebase: sembramos con los valores por defecto
+            state = DEFAULT_DATA;
+            dbRef.set(state).catch(err => console.error('Error sembrando datos:', err));
+          }
+          setConnStatus('connected');
+          renderApp();
+        }, (error) => {
+          clearTimeout(timeoutId);
+          console.error('Error de Firebase:', error);
+          setConnStatus('error', 'Error al leer datos: ' + (error.message || 'permisos insuficientes. Revisa las reglas de tu Realtime Database.'));
+          renderApp();
+        });
+      } catch (err) {
+        console.error('Error inicializando Firebase:', err);
+        setConnStatus('error', 'No se pudo inicializar Firebase: ' + err.message);
+        renderApp();
+      }
+    }
 
     function saveState() {
-      localStorage.setItem('stef_fintech_db', JSON.stringify(state));
+      // Render optimista: la UI se actualiza al instante...
       renderApp();
+      // ...y en paralelo se guarda en Firebase. Si falla, avisamos pero no
+      // perdemos lo que ya se ve en pantalla.
+      if (dbRef) {
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+          dbRef.set(state).catch(err => {
+            console.error('Error guardando en Firebase:', err);
+            setConnStatus('error', 'No se pudo guardar el último cambio: ' + err.message);
+          });
+        }, 150);
+      }
     }
 
     function switchTab(tabId) {
@@ -496,7 +604,8 @@
     }
 
     window.onload = function() {
-      renderApp();
+      renderApp(); // pinta la UI de inmediato con datos por defecto, nunca pantalla en blanco
+      initFirebase();
     };
   </script>
 </body>
