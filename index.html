@@ -194,6 +194,7 @@
               <th class="p-4">Tarjeta</th>
               <th class="p-4">Tipo</th>
               <th class="p-4">Monto</th>
+              <th class="p-4">Acciones</th>
             </tr>
           </thead>
           <tbody id="history-rows" class="divide-y divide-slate-100"></tbody>
@@ -372,6 +373,10 @@
           <button onclick="addToGoogleCalendar('${c.name}', ${c.cutoff})" class="w-full text-center py-2 text-xs bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition">
             📅 Agendar en Google Calendar
           </button>
+          <div class="grid grid-cols-2 gap-2">
+            <button onclick="editCard('${c.id}')" class="py-2 text-xs bg-slate-50 text-slate-600 font-bold rounded-xl hover:bg-slate-100 transition border border-slate-200">✏️ Editar</button>
+            <button onclick="deleteCard('${c.id}')" class="py-2 text-xs bg-rose-50 text-rose-600 font-bold rounded-xl hover:bg-rose-100 transition border border-rose-200">🗑️ Eliminar</button>
+          </div>
         </div>
       `).join('');
 
@@ -399,17 +404,21 @@
 
       // Render Domiciliados
       document.getElementById('domiciled-list').innerHTML = state.domiciled.map(d => `
-        <div class="dashboard-card p-4 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <input type="checkbox" ${d.paid ? 'checked' : ''} onchange="toggleDomiciled('${d.id}')" class="w-5 h-5 accent-emerald-500 rounded-lg cursor-pointer">
-            <div>
-              <p class="font-extrabold text-slate-800 text-sm ${d.paid ? 'line-through text-slate-400' : ''}">${d.name}</p>
+        <div class="dashboard-card p-4 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3 flex-1 min-w-0">
+            <input type="checkbox" ${d.paid ? 'checked' : ''} onchange="toggleDomiciled('${d.id}')" class="w-5 h-5 accent-emerald-500 rounded-lg cursor-pointer shrink-0">
+            <div class="min-w-0">
+              <p class="font-extrabold text-slate-800 text-sm truncate ${d.paid ? 'line-through text-slate-400' : ''}">${d.name}</p>
               <p class="text-xs text-slate-400 font-semibold">$${d.amount.toFixed(2)} / mes</p>
             </div>
           </div>
-          <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${d.paid ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}">
+          <span class="text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 ${d.paid ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}">
             ${d.paid ? 'Pagado' : 'Pendiente'}
           </span>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="editDomiciled('${d.id}')" title="Editar" class="w-8 h-8 flex items-center justify-center text-xs bg-slate-50 text-slate-600 font-bold rounded-lg hover:bg-slate-100 transition border border-slate-200">✏️</button>
+            <button onclick="deleteDomiciled('${d.id}')" title="Eliminar" class="w-8 h-8 flex items-center justify-center text-xs bg-rose-50 text-rose-600 font-bold rounded-lg hover:bg-rose-100 transition border border-rose-200">🗑️</button>
+          </div>
         </div>
       `).join('');
 
@@ -466,6 +475,12 @@
           <td class="p-4 text-xs font-bold text-slate-800">${h.card}</td>
           <td class="p-4"><span class="px-2.5 py-1 text-xs font-black rounded-lg ${h.type === 'Gasto' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}">${h.type}</span></td>
           <td class="p-4 text-xs font-black text-slate-900">$${h.amount.toFixed(2)}</td>
+          <td class="p-4">
+            <div class="flex items-center gap-1.5">
+              <button onclick="editHistoryItem('${h.id}')" title="Editar monto" class="w-8 h-8 flex items-center justify-center text-xs bg-slate-50 text-slate-600 font-bold rounded-lg hover:bg-slate-100 transition border border-slate-200">✏️</button>
+              <button onclick="deleteHistoryItem('${h.id}')" title="Eliminar" class="w-8 h-8 flex items-center justify-center text-xs bg-rose-50 text-rose-600 font-bold rounded-lg hover:bg-rose-100 transition border border-rose-200">🗑️</button>
+            </div>
+          </td>
         </tr>
       `).join('');
 
@@ -482,7 +497,56 @@
         card.debt = Math.max(0, card.debt - amount);
         card.paid += amount;
       }
-      state.history.unshift({ date: new Date().toLocaleDateString(), card: card.name, type: type === 'spend' ? 'Gasto' : 'Abono', amount });
+      state.history.unshift({ id: Date.now().toString() + Math.random().toString(36).slice(2), cardId: card.id, date: new Date().toLocaleDateString(), card: card.name, type: type === 'spend' ? 'Gasto' : 'Abono', amount });
+      saveState();
+    }
+
+    function editHistoryItem(historyId) {
+      const item = state.history.find(h => h.id === historyId);
+      if(!item) return;
+      const newAmountRaw = prompt(`Editar monto de "${item.type}" en ${item.card} (actual $${item.amount.toFixed(2)}):`, item.amount);
+      if(newAmountRaw === null) return;
+      const newAmount = parseFloat(newAmountRaw);
+      if(!newAmount || isNaN(newAmount) || newAmount <= 0) { alert('Monto inválido.'); return; }
+
+      const card = state.cards.find(c => c.id === item.cardId);
+      if(card) {
+        // Revertimos el efecto original sobre la tarjeta...
+        if(item.type === 'Gasto') {
+          card.debt -= item.amount;
+        } else {
+          card.debt += item.amount;
+          card.paid -= item.amount;
+        }
+        // ...y aplicamos el nuevo monto.
+        if(item.type === 'Gasto') {
+          card.debt += newAmount;
+        } else {
+          card.debt = Math.max(0, card.debt - newAmount);
+          card.paid += newAmount;
+        }
+        card.debt = Math.max(0, card.debt);
+        card.paid = Math.max(0, card.paid);
+      }
+      item.amount = newAmount;
+      saveState();
+    }
+
+    function deleteHistoryItem(historyId) {
+      const item = state.history.find(h => h.id === historyId);
+      if(!item) return;
+      if(!confirm(`¿Eliminar este ${item.type.toLowerCase()} de ${item.card} por $${item.amount.toFixed(2)}?`)) return;
+
+      const card = state.cards.find(c => c.id === item.cardId);
+      if(card) {
+        if(item.type === 'Gasto') {
+          card.debt = Math.max(0, card.debt - item.amount);
+        } else {
+          card.debt += item.amount;
+          card.paid = Math.max(0, card.paid - item.amount);
+        }
+      }
+      state.history = state.history.filter(h => h.id !== historyId);
       saveState();
     }
 
@@ -495,6 +559,30 @@
       }
     }
 
+    function editCard(cardId) {
+      const card = state.cards.find(c => c.id === cardId);
+      if(!card) return;
+      const name = prompt('Nombre de la tarjeta:', card.name);
+      if(name === null) return;
+      const cutoffRaw = prompt('Día de corte (1-31):', card.cutoff);
+      if(cutoffRaw === null) return;
+      const cutoff = parseInt(cutoffRaw);
+      if(!name.trim() || !cutoff || cutoff < 1 || cutoff > 31) { alert('Datos inválidos.'); return; }
+      card.name = name.trim();
+      card.cutoff = cutoff;
+      // Mantenemos consistente el nombre en el historial ya registrado
+      state.history.forEach(h => { if(h.cardId === cardId) h.card = card.name; });
+      saveState();
+    }
+
+    function deleteCard(cardId) {
+      const card = state.cards.find(c => c.id === cardId);
+      if(!card) return;
+      if(!confirm(`¿Eliminar la tarjeta "${card.name}"? Esto no borra su historial de movimientos.`)) return;
+      state.cards = state.cards.filter(c => c.id !== cardId);
+      saveState();
+    }
+
     function openDomiciledModal() {
       const name = prompt('Nombre del servicio:');
       const amount = parseFloat(prompt('Monto mensual:'));
@@ -502,6 +590,28 @@
         state.domiciled.push({ id: Date.now().toString(), name, amount, paid: false });
         saveState();
       }
+    }
+
+    function editDomiciled(id) {
+      const item = state.domiciled.find(d => d.id === id);
+      if(!item) return;
+      const name = prompt('Nombre del servicio:', item.name);
+      if(name === null) return;
+      const amountRaw = prompt('Monto mensual:', item.amount);
+      if(amountRaw === null) return;
+      const amount = parseFloat(amountRaw);
+      if(!name.trim() || !amount || isNaN(amount) || amount <= 0) { alert('Datos inválidos.'); return; }
+      item.name = name.trim();
+      item.amount = amount;
+      saveState();
+    }
+
+    function deleteDomiciled(id) {
+      const item = state.domiciled.find(d => d.id === id);
+      if(!item) return;
+      if(!confirm(`¿Eliminar el servicio "${item.name}"?`)) return;
+      state.domiciled = state.domiciled.filter(d => d.id !== id);
+      saveState();
     }
 
     function openLoanModal() {
